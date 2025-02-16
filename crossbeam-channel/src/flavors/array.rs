@@ -327,23 +327,75 @@ impl<T> Channel<T> {
 
     /// Force send a message into the channel. Only fails if the channel is disconnected
     pub(crate) fn force_send(&self, mut msg: T) -> Result<Option<T>, ForceSendError<T>> {
-        let mut token = Token::default();
-        if self.start_send(&mut token) {
-            match unsafe { self.write(&mut token, msg) } {
-                Ok(()) => Ok(None),
-                Err(msg) => Err(ForceSendError::Disconnected(msg)),
-            }
-        } else {
-            let tail = self.tail.load(Ordering::Acquire);
-            let prev_index = match tail & (self.mark_bit - 1) {
-                0 => self.cap() - 1,
-                x => x - 1,
-            };
-            let queued_msg =
-                unsafe { (*self.buffer.get_unchecked(prev_index).msg.get()).assume_init_mut() };
-            std::mem::swap(&mut msg, queued_msg);
-            Ok(Some(msg))
+        // todo: figure out ordering::relaxed vs acquired etc
+        let head = self.head.load(Ordering::Relaxed);
+        let read_index = head & (self.mark_bit - 1);
+        let read_lap = head & !(self.one_lap - 1);
+
+        let tail = self.tail.load(Ordering::Relaxed);
+        let write_index = tail & (self.mark_bit - 1);
+        let write_lap = tail & (self.one_lap - 1);
+
+        let is_disconnected = (tail & self.mark_bit) != 0;
+        let is_empty = head == tail & !self.mark_bit;
+        let is_full = head.wrapping_add(self.one_lap) == tail & !self.mark_bit;
+
+        if is_disconnected {
+            return Err(ForceSendError(msg));
         }
+
+        debug_assert!(read_index < self.buffer.len());
+        let read_slot = unsafe { self.buffer.get_unchecked(read_index) };
+        let read_stamp = read_slot.stamp.load(Ordering::Relaxed);
+        
+        debug_assert!(read_index < self.buffer.len());
+        let write_slot = unsafe { self.buffer.get_unchecked(write_index) };
+        let write_stamp = write_slot.stamp.load(Ordering::Relaxed);
+
+        if is_full {
+            let x = unsafe {
+                (*read_slot.msg.get()).assume_init_mut()
+            };
+            std::mem::swap(&mut msg, x);
+            // increment head here?
+            self.head.store(0, Ordering::Relaxed);
+            self.tail.store(0, Ordering::Relaxed);
+            // this hangs though. Do we need to update the stamp somehow?
+            // what is even the stamp?
+
+            // probably also need to update the lap
+            
+            self.receivers.notify();
+            return Ok(Some(msg))
+        }
+
+        // We always write to the tail
+        // We always read from the head
+        // 
+        //   H           T
+        // [ 0, 1, 2, 3, _, _ ]
+        //
+        //   H              T
+        // [ 0, 1, 2, 3, 4, _ ]
+        //
+        //   H
+        //   T              
+        // [ 0, 1, 2, 3, 4, 5 ]
+        //
+        // We are now full, so this is wrong:
+        //
+        //   H  T            
+        // [ 6, 1, 2, 3, 4, 5 ]
+        //
+        // We need to also move the head
+        //        
+        //      H
+        //      T            
+        // [ 6, 1, 2, 3, 4, 5 ]
+
+
+        self.try_send(msg).unwrap();
+        Ok(None)
     }
 
     /// Sends a message into the channel.
