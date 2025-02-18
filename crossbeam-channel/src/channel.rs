@@ -425,30 +425,30 @@ impl<T> Sender<T> {
     /// use crossbeam_channel::{bounded, ForceSendError};
     ///
     /// let (s, r) = bounded(3);
-    /// 
+    ///
     /// assert_eq!(s.force_send(0), Ok(None));
     /// assert_eq!(s.force_send(1), Ok(None));
     /// assert_eq!(s.force_send(2), Ok(None));
     /// assert_eq!(s.force_send(3), Ok(Some(0)));
-    /// 
+    ///
     /// assert_eq!(r.recv(), Ok(1));
-    /// 
+    ///
     /// assert_eq!(s.force_send(4), Ok(None));
-    /// 
+    ///
     /// assert_eq!(r.recv(), Ok(2));
     /// assert_eq!(r.recv(), Ok(3));
-    /// 
+    ///
     /// assert_eq!(s.force_send(5), Ok(None));
     /// assert_eq!(s.force_send(6), Ok(None));
     /// assert_eq!(s.force_send(7), Ok(Some(4)));
     /// assert_eq!(s.force_send(8), Ok(Some(5)));
-    /// 
+    ///
     /// assert_eq!(r.recv(), Ok(6));
     /// assert_eq!(r.recv(), Ok(7));
     /// assert_eq!(r.recv(), Ok(8));
-    /// 
+    ///
     /// drop(r);
-    /// 
+    ///
     /// assert_eq!(s.force_send(9), Err(ForceSendError(9)));
     /// ``````
     pub fn force_send(&self, msg: T) -> Result<Option<T>, ForceSendError<T>> {

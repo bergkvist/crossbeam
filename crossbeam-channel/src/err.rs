@@ -14,7 +14,7 @@ pub struct SendError<T>(pub T);
 /// An error returned from the [`force_send`] method.
 ///
 /// The message could not be sent because the channel is disconnected.
-/// 
+///
 /// The error contains the message so it can be recovered.
 ///
 /// [`force_send`]: super::Sender::force_send

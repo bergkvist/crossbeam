@@ -326,76 +326,26 @@ impl<T> Channel<T> {
     }
 
     /// Force send a message into the channel. Only fails if the channel is disconnected
-    pub(crate) fn force_send(&self, mut msg: T) -> Result<Option<T>, ForceSendError<T>> {
-        // todo: figure out ordering::relaxed vs acquired etc
-        let head = self.head.load(Ordering::Relaxed);
-        let read_index = head & (self.mark_bit - 1);
-        let read_lap = head & !(self.one_lap - 1);
-
-        let tail = self.tail.load(Ordering::Relaxed);
-        let write_index = tail & (self.mark_bit - 1);
-        let write_lap = tail & (self.one_lap - 1);
-
-        let is_disconnected = (tail & self.mark_bit) != 0;
-        let is_empty = head == tail & !self.mark_bit;
-        let is_full = head.wrapping_add(self.one_lap) == tail & !self.mark_bit;
-
-        if is_disconnected {
+    ///
+    /// Note that this is currently a naive implementation to make the sequential test pass
+    pub(crate) fn force_send(&self, msg: T) -> Result<Option<T>, ForceSendError<T>> {
+        if self.is_disconnected() {
             return Err(ForceSendError(msg));
         }
 
-        debug_assert!(read_index < self.buffer.len());
-        let read_slot = unsafe { self.buffer.get_unchecked(read_index) };
-        let read_stamp = read_slot.stamp.load(Ordering::Relaxed);
-        
-        debug_assert!(read_index < self.buffer.len());
-        let write_slot = unsafe { self.buffer.get_unchecked(write_index) };
-        let write_stamp = write_slot.stamp.load(Ordering::Relaxed);
-
-        if is_full {
-            let x = unsafe {
-                (*read_slot.msg.get()).assume_init_mut()
+        let old_msg = if self.is_full() {
+            let Ok(old_msg) = self.try_recv() else {
+                return Err(ForceSendError(msg));
             };
-            std::mem::swap(&mut msg, x);
-            // increment head here?
-            self.head.store(0, Ordering::Relaxed);
-            self.tail.store(0, Ordering::Relaxed);
-            // this hangs though. Do we need to update the stamp somehow?
-            // what is even the stamp?
+            Some(old_msg)
+        } else {
+            None
+        };
 
-            // probably also need to update the lap
-            
-            self.receivers.notify();
-            return Ok(Some(msg))
-        }
+        self.try_send(msg)
+            .map_err(|e| ForceSendError(e.into_inner()))?;
 
-        // We always write to the tail
-        // We always read from the head
-        // 
-        //   H           T
-        // [ 0, 1, 2, 3, _, _ ]
-        //
-        //   H              T
-        // [ 0, 1, 2, 3, 4, _ ]
-        //
-        //   H
-        //   T              
-        // [ 0, 1, 2, 3, 4, 5 ]
-        //
-        // We are now full, so this is wrong:
-        //
-        //   H  T            
-        // [ 6, 1, 2, 3, 4, 5 ]
-        //
-        // We need to also move the head
-        //        
-        //      H
-        //      T            
-        // [ 6, 1, 2, 3, 4, 5 ]
-
-
-        self.try_send(msg).unwrap();
-        Ok(None)
+        Ok(old_msg)
     }
 
     /// Sends a message into the channel.
